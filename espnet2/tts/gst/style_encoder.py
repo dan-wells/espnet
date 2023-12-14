@@ -75,7 +75,7 @@ class StyleEncoder(torch.nn.Module):
             gst_heads=gst_heads,
         )
 
-    def forward(self, speech: torch.Tensor) -> torch.Tensor:
+    def forward(self, speech: torch.Tensor, gsts: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Calculate forward propagation.
 
         Args:
@@ -85,8 +85,9 @@ class StyleEncoder(torch.nn.Module):
             Tensor: Style token embeddings (B, token_dim).
 
         """
+        # TODO: skip reference encoder if passing explicit GST weights
         ref_embs = self.ref_enc(speech)
-        style_embs = self.stl(ref_embs)
+        style_embs = self.stl(ref_embs, gsts)
 
         return style_embs
 
@@ -232,7 +233,7 @@ class StyleTokenLayer(torch.nn.Module):
             dropout_rate=dropout_rate,
         )
 
-    def forward(self, ref_embs: torch.Tensor) -> torch.Tensor:
+    def forward(self, ref_embs: torch.Tensor, gsts: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Calculate forward propagation.
 
         Args:
@@ -247,7 +248,7 @@ class StyleTokenLayer(torch.nn.Module):
         gst_embs = torch.tanh(self.gst_embs).unsqueeze(0).expand(batch_size, -1, -1)
         # NOTE(kan-bayashi): Shoule we apply Tanh?
         ref_embs = ref_embs.unsqueeze(1)  # (batch_size, 1 ,ref_embed_dim)
-        style_embs = self.mha(ref_embs, gst_embs, gst_embs, None)
+        style_embs = self.mha(ref_embs, gst_embs, gst_embs, None, attn_weights=gsts)
 
         return style_embs.squeeze(1)
 
@@ -270,3 +271,63 @@ class MultiHeadedAttention(BaseMultiHeadedAttention):
         self.linear_out = torch.nn.Linear(n_feat, n_feat)
         self.attn = None
         self.dropout = torch.nn.Dropout(p=dropout_rate)
+
+    def forward_attention(self, value, scores, mask, attn_weights=None):
+        """Compute attention context vector.
+
+        Args:
+            value (torch.Tensor): Transformed value (#batch, n_head, time2, d_k).
+            scores (torch.Tensor): Attention score (#batch, n_head, time1, time2).
+            mask (torch.Tensor): Mask (#batch, 1, time2) or (#batch, time1, time2).
+            attn_weights (torch.Tensor): Attention weights (#batch, n_head, time1, time2)
+                to use, not derived from reference encoder
+
+        Returns:
+            torch.Tensor: Transformed value (#batch, time1, d_model)
+                weighted by the attention score (#batch, time1, time2).
+
+        """
+        n_batch = value.size(0)
+        if mask is not None:
+            if attn_weights is not None:
+                # skip scores (= reference embeddings)
+                self.attn = attn_weights.masked_fill(mask, 0.0)
+            else:
+                mask = mask.unsqueeze(1).eq(0)  # (batch, 1, *, time2)
+                min_value = torch.finfo(scores.dtype).min
+                scores = scores.masked_fill(mask, min_value)
+                self.attn = torch.softmax(scores, dim=-1).masked_fill(
+                    mask, 0.0
+                )  # (batch, head, time1, time2)
+        else:
+            if attn_weights is not None:
+                # skip scores (= reference embeddings)
+                self.attn = attn_weights
+            else:
+                self.attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
+
+        p_attn = self.dropout(self.attn)
+        x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
+        x = (
+            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
+        )  # (batch, time1, d_model)
+
+        return self.linear_out(x)  # (batch, time1, d_model)
+
+    def forward(self, query, key, value, mask, attn_weights=None):
+        """Compute scaled dot product attention.
+
+        Args:
+            query (torch.Tensor): Query tensor (#batch, time1, size).
+            key (torch.Tensor): Key tensor (#batch, time2, size).
+            value (torch.Tensor): Value tensor (#batch, time2, size).
+            mask (torch.Tensor): Mask tensor (#batch, 1, time2) or
+                (#batch, time1, time2).
+
+        Returns:
+            torch.Tensor: Output tensor (#batch, time1, d_model).
+
+        """
+        q, k, v = self.forward_qkv(query, key, value)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        return self.forward_attention(v, scores, mask, attn_weights)

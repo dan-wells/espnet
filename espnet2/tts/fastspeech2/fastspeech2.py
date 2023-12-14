@@ -494,6 +494,7 @@ class FastSpeech2(AbsTTS):
         spembs: Optional[torch.Tensor] = None,
         sids: Optional[torch.Tensor] = None,
         lids: Optional[torch.Tensor] = None,
+        gst_weights: Optional[torch.Tensor] = None,
         joint_training: bool = False,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
         """Calculate forward propagation.
@@ -512,6 +513,7 @@ class FastSpeech2(AbsTTS):
             spembs (Optional[Tensor]): Batch of speaker embeddings (B, spk_embed_dim).
             sids (Optional[Tensor]): Batch of speaker IDs (B, 1).
             lids (Optional[Tensor]): Batch of language IDs (B, 1).
+            gst_weights (Optional[Tensor]): Batch of GST weights (B, gst_heads, gst_tokens).
             joint_training (bool): Whether to perform joint training with vocoder.
 
         Returns:
@@ -538,7 +540,7 @@ class FastSpeech2(AbsTTS):
         olens = feats_lengths
 
         # forward propagation
-        before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
+        before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights_outs = self._forward(
             xs,
             ilens,
             ys,
@@ -549,6 +551,7 @@ class FastSpeech2(AbsTTS):
             spembs=spembs,
             sids=sids,
             lids=lids,
+            gst_weights=gst_weights,
             is_inference=False,
         )
 
@@ -616,6 +619,7 @@ class FastSpeech2(AbsTTS):
         spembs: Optional[torch.Tensor] = None,
         sids: Optional[torch.Tensor] = None,
         lids: Optional[torch.Tensor] = None,
+        gst_weights: Optional[torch.Tensor] = None,
         is_inference: bool = False,
         alpha: float = 1.0,
     ) -> Sequence[torch.Tensor]:
@@ -626,11 +630,14 @@ class FastSpeech2(AbsTTS):
         # integrate with GST
         # TODO: add option to take provided style_embs/weights
         if self.use_gst:
-            style_embs = self.gst(ys)
+            style_embs = self.gst(ys, gst_weights)
             hs = hs + style_embs.unsqueeze(1)
-            gst_weights = self.gst.stl.mha.attn  # set during forward pass
+            # FIXME: remove -- just checking modification to mha
+            if gst_weights is not None:
+                assert self.gst.stl.mha.attn == gst_weights
+            gst_weights_outs = self.gst.stl.mha.attn  # set during forward pass
         else:
-            gst_weights = None
+            gst_weights_outs = None
 
         # integrate with SID and LID embeddings
         if self.spks is not None:
@@ -698,7 +705,7 @@ class FastSpeech2(AbsTTS):
                 before_outs.transpose(1, 2)
             ).transpose(1, 2)
 
-        return before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights
+        return before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights_outs
 
     def inference(
         self,
@@ -708,6 +715,7 @@ class FastSpeech2(AbsTTS):
         spembs: torch.Tensor = None,
         sids: Optional[torch.Tensor] = None,
         lids: Optional[torch.Tensor] = None,
+        gst_weights: Optional[torch.Tensor] = None,
         pitch: Optional[torch.Tensor] = None,
         energy: Optional[torch.Tensor] = None,
         alpha: float = 1.0,
@@ -753,7 +761,7 @@ class FastSpeech2(AbsTTS):
         if use_teacher_forcing:
             # use groundtruth of duration, pitch, and energy
             ds, ps, es = d.unsqueeze(0), p.unsqueeze(0), e.unsqueeze(0)
-            _, outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
+            _, outs, d_outs, p_outs, e_outs, gst_weights_outs = self._forward(
                 xs,
                 ilens,
                 ys,
@@ -763,28 +771,30 @@ class FastSpeech2(AbsTTS):
                 spembs=spembs,
                 sids=sids,
                 lids=lids,
+                gst_weights=gst_weights,
             )  # (1, T_feats, odim)
         else:
-            _, outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
+            _, outs, d_outs, p_outs, e_outs, gst_weights_outs = self._forward(
                 xs,
                 ilens,
                 ys,
                 spembs=spembs,
                 sids=sids,
                 lids=lids,
+                gst_weights=gst_weights,
                 is_inference=True,
                 alpha=alpha,
             )  # (1, T_feats, odim)
 
-        if gst_weights is not None:
-            gst_weights = gst_weights[0]
+        if gst_weights_outs is not None:
+            gst_weights_outs = gst_weights_outs[0]
 
         return dict(
             feat_gen=outs[0],
             duration=d_outs[0],
             pitch=p_outs[0],
             energy=e_outs[0],
-            gst_weights=gst_weights,
+            gst_weights=gst_weights_outs,
         )
 
     def _integrate_with_spk_embed(
