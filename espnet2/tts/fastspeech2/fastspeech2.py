@@ -538,7 +538,7 @@ class FastSpeech2(AbsTTS):
         olens = feats_lengths
 
         # forward propagation
-        before_outs, after_outs, d_outs, p_outs, e_outs = self._forward(
+        before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
             xs,
             ilens,
             ys,
@@ -624,9 +624,13 @@ class FastSpeech2(AbsTTS):
         hs, _ = self.encoder(xs, x_masks)  # (B, T_text, adim)
 
         # integrate with GST
+        # TODO: add option to take provided style_embs/weights
         if self.use_gst:
             style_embs = self.gst(ys)
             hs = hs + style_embs.unsqueeze(1)
+            gst_weights = self.gst.stl.mha.attn  # set during forward pass
+        else:
+            gst_weights = None
 
         # integrate with SID and LID embeddings
         if self.spks is not None:
@@ -694,7 +698,7 @@ class FastSpeech2(AbsTTS):
                 before_outs.transpose(1, 2)
             ).transpose(1, 2)
 
-        return before_outs, after_outs, d_outs, p_outs, e_outs
+        return before_outs, after_outs, d_outs, p_outs, e_outs, gst_weights
 
     def inference(
         self,
@@ -749,7 +753,7 @@ class FastSpeech2(AbsTTS):
         if use_teacher_forcing:
             # use groundtruth of duration, pitch, and energy
             ds, ps, es = d.unsqueeze(0), p.unsqueeze(0), e.unsqueeze(0)
-            _, outs, d_outs, p_outs, e_outs = self._forward(
+            _, outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
                 xs,
                 ilens,
                 ys,
@@ -761,7 +765,7 @@ class FastSpeech2(AbsTTS):
                 lids=lids,
             )  # (1, T_feats, odim)
         else:
-            _, outs, d_outs, p_outs, e_outs = self._forward(
+            _, outs, d_outs, p_outs, e_outs, gst_weights = self._forward(
                 xs,
                 ilens,
                 ys,
@@ -772,11 +776,15 @@ class FastSpeech2(AbsTTS):
                 alpha=alpha,
             )  # (1, T_feats, odim)
 
+        if gst_weights is not None:
+            gst_weights = gst_weights[0]
+
         return dict(
             feat_gen=outs[0],
             duration=d_outs[0],
             pitch=p_outs[0],
             energy=e_outs[0],
+            gst_weights=gst_weights,
         )
 
     def _integrate_with_spk_embed(

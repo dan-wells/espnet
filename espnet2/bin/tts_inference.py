@@ -408,6 +408,7 @@ def inference(
     (output_dir / "probs").mkdir(parents=True, exist_ok=True)
     (output_dir / "durations").mkdir(parents=True, exist_ok=True)
     (output_dir / "focus_rates").mkdir(parents=True, exist_ok=True)
+    (output_dir / "gst_weights").mkdir(parents=True, exist_ok=True)
 
     # Lazy load to avoid the backend error
     import matplotlib
@@ -421,7 +422,9 @@ def inference(
         output_dir / "norm/feats.scp",
     ) as norm_writer, NpyScpWriter(
         output_dir / "denorm", output_dir / "denorm/feats.scp"
-    ) as denorm_writer, open(
+    ) as denorm_writer, NpyScpWriter(
+        output_dir / "gst_weights", output_dir / "gst_weights/feats.scp"
+    ) as gst_weights_writer, open(
         output_dir / "speech_shape/speech_shape", "w"
     ) as shape_writer, open(
         output_dir / "durations/durations", "w"
@@ -470,6 +473,9 @@ def inference(
                     )
                 )
                 logging.info(f"{key} (size:{insize}->{wav.size(0)})")
+
+            if output_dict.get("gst_weights") is not None:
+                gst_weights_writer[key] = output_dict["gst_weights"].cpu().numpy()
 
             if output_dict.get("duration") is not None:
                 # Save duration and fucus rates
@@ -553,6 +559,8 @@ def inference(
         shutil.rmtree(output_dir / "durations")
     if output_dict.get("focus_rate") is None:
         shutil.rmtree(output_dir / "focus_rates")
+    if output_dict.get("gst_weights") is None:
+        shutil.rmtree(output_dir / "gst_weights")
     if output_dict.get("prob") is None:
         shutil.rmtree(output_dir / "probs")
     if output_dict.get("wav") is None:
