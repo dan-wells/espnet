@@ -3,7 +3,8 @@
 
 """Style encoder of GST-Tacotron."""
 
-from typing import Sequence
+import math
+from typing import Optional, Sequence
 
 import torch
 from typeguard import check_argument_types
