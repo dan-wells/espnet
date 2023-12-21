@@ -153,6 +153,7 @@ class Text2Speech:
         spembs: Union[torch.Tensor, np.ndarray] = None,
         sids: Union[torch.Tensor, np.ndarray] = None,
         lids: Union[torch.Tensor, np.ndarray] = None,
+        gst_weights: Union[torch.Tensor, np.ndarray] = None,
         decode_conf: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, torch.Tensor]:
         """Run text-to-speech."""
@@ -182,6 +183,8 @@ class Text2Speech:
             batch.update(sids=sids)
         if lids is not None:
             batch.update(lids=lids)
+        if gst_weights is not None:
+            batch.update(gst_weights=gst_weights)
         batch = to_device(batch, self.device)
 
         # overwrite the decode configs if provided

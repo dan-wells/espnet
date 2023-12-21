@@ -271,6 +271,7 @@ class TTSTask(AbsTask):
                 "energy",
                 "sids",
                 "lids",
+                "gst_weights",
             )
         return retval
 
