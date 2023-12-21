@@ -628,13 +628,9 @@ class FastSpeech2(AbsTTS):
         hs, _ = self.encoder(xs, x_masks)  # (B, T_text, adim)
 
         # integrate with GST
-        # TODO: add option to take provided style_embs/weights
         if self.use_gst:
             style_embs = self.gst(ys, gst_weights)
             hs = hs + style_embs.unsqueeze(1)
-            # FIXME: remove -- just checking modification to mha
-            if gst_weights is not None:
-                assert self.gst.stl.mha.attn == gst_weights
             gst_weights_outs = self.gst.stl.mha.attn  # set during forward pass
         else:
             gst_weights_outs = None
@@ -730,6 +726,7 @@ class FastSpeech2(AbsTTS):
             spembs (Optional[Tensor): Speaker embedding vector (spk_embed_dim,).
             sids (Optional[Tensor]): Speaker ID (1,).
             lids (Optional[Tensor]): Language ID (1,).
+            gst_weights (Optional[Tensor]): GST (gst_heads, gst_tokens).
             pitch (Optional[Tensor]): Groundtruth of token-avg pitch (T_text + 1, 1).
             energy (Optional[Tensor]): Groundtruth of token-avg energy (T_text + 1, 1).
             alpha (float): Alpha to control the speed.
